@@ -5,9 +5,9 @@ import pandas as pd
 import time
 
 from pdf_utils import find_all_gcn_pdfs
-from processor import process_batch_pdfs
-from excel_exporter import export_to_excel
+from excel_exporter import export_to_excel_memory
 from config import Config
+from processed_cache import ProcessedCache
 
 
 def main():
@@ -75,6 +75,23 @@ def main():
                 help="Thời gian chờ tối đa cho mỗi request API"
             )
         
+        # Cache management section
+        st.subheader("💾 Quản lý Cache")
+        
+        # Initialize cache
+        cache = ProcessedCache()
+        cache_stats = cache.get_cache_stats()
+        
+        col_cache1, col_cache2 = st.columns(2)
+        with col_cache1:
+            st.metric("📁 Tổng file đã xử lý", cache_stats["total"])
+        with col_cache2:
+            skip_processed = st.checkbox(
+                "Bỏ qua file đã xử lý", 
+                value=Config.SKIP_PROCESSED_DEFAULT, 
+                help="Tự động bỏ qua các file đã được xử lý trước đó"
+            )
+        
         # Find GCN files when search button is clicked or Enter is pressed
         if search_button:
             input_dir = Path(folder_path)
@@ -100,6 +117,12 @@ def main():
                 return
             
             st.success(f"✅ Đã tìm thấy **{len(gcn_files)}** file GCN")
+            
+            # Check how many files are already processed
+            if skip_processed:
+                already_processed = sum(1 for f in gcn_files if cache.is_processed(f))
+                if already_processed > 0:
+                    st.info(f"💡 Có **{already_processed}** file đã được xử lý trước đó (sẽ bỏ qua)")
             
             # Select number of files to process
             col_batch1, col_batch2 = st.columns([3, 1])
@@ -127,85 +150,6 @@ def main():
             else:
                 st.info(f"📊 Sẽ xử lý **{actual_batch_size}** file đầu tiên")
             
-            # Show file structure
-            with st.expander("📁 Xem cấu trúc thư mục", expanded=True):
-                st.markdown(f"**📂 Cấu trúc thư mục ({len(gcn_files)} file):**")
-                
-                # Build directory tree for all files
-                dir_structure = {}
-                for file_path in gcn_files:
-                    try:
-                        rel_path = file_path.relative_to(input_dir)
-                        parts = rel_path.parts
-                        
-                        # Build nested dict structure
-                        current = dir_structure
-                        for part in parts[:-1]:  # All directories
-                            if part not in current:
-                                current[part] = {}
-                            current = current[part]
-                        
-                        # Add file to the last directory
-                        if '__files__' not in current:
-                            current['__files__'] = []
-                        current['__files__'].append(parts[-1])
-                    except:
-                        pass
-                
-                # Display tree - collect lines first, then display with st.code
-                tree_lines = []
-                
-                def display_tree(tree, prefix=""):
-                    items = [(k, v) for k, v in tree.items() if k != '__files__']
-                    files = tree.get('__files__', [])
-                    
-                    total_items = len(items) + len(files)
-                    current_item = 0
-                    
-                    # Display directories first
-                    for dirname, subtree in items:
-                        current_item += 1
-                        is_last = current_item == total_items
-                        
-                        connector = "└── " if is_last else "├── "
-                        tree_lines.append(f"{prefix}{connector}📁 {dirname}/")
-                        
-                        # Prepare prefix for children
-                        child_prefix = prefix + ("    " if is_last else "│   ")
-                        display_tree(subtree, child_prefix)
-                    
-                    # Display files
-                    for filename in files:
-                        current_item += 1
-                        is_last = current_item == total_items
-                        
-                        connector = "└── " if is_last else "├── "
-                        tree_lines.append(f"{prefix}{connector}📄 {filename}")
-                
-                if dir_structure:
-                    tree_lines.append(f"📁 {input_dir.name}/")
-                    display_tree(dir_structure, "    ")
-                    
-                    # Display all lines using st.code with custom container for fixed height
-                    st.markdown("""
-                    <style>
-                    .tree-container {
-                        max-height: 400px;
-                        overflow-y: auto;
-                        border: 1px solid #e0e0e0;
-                        border-radius: 5px;
-                        padding: 10px;
-                        font-family: monospace;
-                        white-space: pre;
-                    }
-                    </style>
-                    """, unsafe_allow_html=True)
-                    
-                    tree_content = "\n".join(tree_lines)
-                    st.markdown(f'<div class="tree-container">{tree_content}</div>', unsafe_allow_html=True)
-                else:
-                    st.text("Tất cả file nằm trong thư mục gốc")
-            
             # Process button
             if st.button("🚀 Bắt đầu xử lý", type="primary"):
                 selected_files = gcn_files[:actual_batch_size]
@@ -229,14 +173,13 @@ def main():
                 
                 results = []
                 completed = 0
-                worker_assignments = {}  # Track which worker is processing which file
                 
                 with ThreadPoolExecutor(max_workers=max_workers) as executor:
                     # Submit all tasks and assign worker IDs
                     futures = {}
                     for idx, pdf in enumerate(selected_files):
                         worker_id = (idx % max_workers) + 1  # Assign worker ID (1 to max_workers)
-                        future = executor.submit(process_single_pdf, pdf, idx + 1, llm_url, api_timeout)
+                        future = executor.submit(process_single_pdf, pdf, idx + 1, llm_url, api_timeout, cache, skip_processed)
                         futures[future] = (pdf, idx + 1, worker_id)
                     
                     for future in as_completed(futures):
@@ -254,7 +197,10 @@ def main():
                             # Display live log with worker ID
                             with log_container:
                                 status_icon = ""
-                                if result["status"] == "success":
+                                if result["status"] == "cached":
+                                    status_icon = "💾"
+                                    msg = f"Đã xử lý (cache): {result['comparison']}"
+                                elif result["status"] == "success":
                                     if result["comparison"] == "Đúng":
                                         status_icon = "✅"
                                         msg = f"{result['filename_gcn']} = {result['predicted_gcn']}"
@@ -297,6 +243,7 @@ def main():
                     success = sum(1 for r in results if r["status"] == "success")
                     skip = sum(1 for r in results if r["status"] == "skip")
                     error = sum(1 for r in results if r["status"] == "error")
+                    cached = sum(1 for r in results if r["status"] == "cached")
                     correct = sum(1 for r in results if r["comparison"] == "Đúng")
                     incorrect = sum(1 for r in results if r["comparison"] == "Cần hiệu đính")
                     
@@ -306,12 +253,13 @@ def main():
                         st.metric("✅ Thành công", success)
                         st.metric("⏭️ Bỏ qua", skip)
                         st.metric("❌ Lỗi", error)
+                        st.metric("💾 Từ cache", cached)
                     
                     with col_stat2:
                         st.metric("✓ Đúng", correct)
                         st.metric("⚠ Cần hiệu đính", incorrect)
-                        if success > 0:
-                            accuracy = (correct / success) * 100
+                        if (success + cached) > 0:
+                            accuracy = (correct / (success + cached)) * 100
                             st.metric("🎯 Độ chính xác", f"{accuracy:.2f}%")
                     
                     with col_stat3:
@@ -325,7 +273,9 @@ def main():
                     with st.expander("Xem log xử lý từng file", expanded=False):
                         for r in results:
                             status_icon = ""
-                            if r["status"] == "success":
+                            if r["status"] == "cached":
+                                status_icon = "💾"
+                            elif r["status"] == "success":
                                 if r["comparison"] == "Đúng":
                                     status_icon = "✅"
                                 else:
@@ -338,7 +288,13 @@ def main():
                             # Build log message
                             log_msg = f"{status_icon} **#{r['index']}** `{r['pdf_file']}`"
                             
-                            if r["status"] == "success":
+                            if r["status"] == "cached":
+                                log_msg += f"\n   - **Đã xử lý trước đó (từ cache)**"
+                                log_msg += f"\n   - GCN từ tên file: `{r.get('filename_gcn', 'N/A')}`"
+                                log_msg += f"\n   - Dự đoán AI: `{r['predicted_gcn']}`"
+                                log_msg += f"\n   - Kết quả: **{r['comparison']}**"
+                                log_msg += f"\n   - Xử lý lúc: {r.get('processed_at', 'N/A')}"
+                            elif r["status"] == "success":
                                 log_msg += f"\n   - GCN từ tên file: `{r.get('filename_gcn', 'N/A')}`"
                                 log_msg += f"\n   - Dự đoán AI: `{r['predicted_gcn']}`"
                                 log_msg += f"\n   - Kết quả: **{r['comparison']}**"
@@ -387,27 +343,24 @@ def main():
                     st.subheader("💾 Xuất kết quả")
                     
                     # Excel filename input
-                    timestamp = datetime.now().strftime("%Y%m%d")
+                    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
                     excel_filename = st.text_input(
                         "Tên file Excel:",
                         value=f"gcn_comparison_{timestamp}.xlsx",
-                        help="Tên file Excel để lưu kết quả"
+                        help="Tên file Excel để tải xuống"
                     )
                     
-                    if st.button("📊 Xuất ra Excel"):
-                        excel_path = Path(excel_filename)
-                        export_to_excel(results, excel_path)
-                        st.success(f"✅ Đã xuất kết quả ra file: **{excel_path.resolve()}**")
-                        
-                        # Option to download
-                        if excel_path.exists():
-                            with open(excel_path, "rb") as f:
-                                st.download_button(
-                                    label="⬇️ Tải xuống file Excel",
-                                    data=f,
-                                    file_name=excel_filename,
-                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                                )
+                    # Export to memory and download
+                    excel_buffer = export_to_excel_memory(results)
+                    
+                    st.download_button(
+                        label="📊 Tải xuống Excel",
+                        data=excel_buffer,
+                        file_name=excel_filename,
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        type="primary"
+                    )
+                    st.info("💡 File Excel sẽ được tải xuống")
     
     with col2:
         st.header("ℹ️ Thông tin")
@@ -417,13 +370,17 @@ def main():
         
         1. Nhập đường dẫn thư mục chứa file GCN
         
-        2. Nhấn nút "Tìm kiếm file GCN"
+        2. Cấu hình cache (tự động bỏ qua file đã xử lý)
         
-        3. Chọn số lượng file muốn xử lý
+        3. Nhấn nút "Tìm kiếm file GCN"
         
-        4. Nhấn "Bắt đầu xử lý"
+        4. Chọn số lượng file muốn xử lý
         
-        5. Xem kết quả và xuất ra Excel
+        5. Nhấn "Bắt đầu xử lý"
+        
+        6. Xem kết quả và xuất ra Excel
+        
+        💡 **Mẹo**: Cache giúp tránh xử lý lại file đã xử lý trước đó, tiết kiệm thời gian!
         """)
         
         st.markdown("---")

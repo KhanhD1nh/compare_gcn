@@ -6,6 +6,7 @@ from config import Config
 from pdf_utils import find_all_gcn_pdfs
 from processor import process_batch_pdfs
 from excel_exporter import export_to_excel
+from processed_cache import ProcessedCache
 
 
 def main():
@@ -20,7 +21,20 @@ def main():
         print("No GCN files found. Exiting program.")
         return
     
-    # Step 2: Ask user how many files to process
+    # Step 2: Initialize cache and check processed files
+    cache = ProcessedCache()
+    cache_stats = cache.get_cache_stats()
+    print(f"\nCache info: {cache_stats['total']} files processed before")
+    
+    # Ask if user wants to skip processed files
+    skip_input = input("Skip already processed files? (Y/n): ").strip().lower()
+    skip_processed = skip_input != 'n'
+    
+    if skip_processed:
+        already_processed = sum(1 for f in gcn_files if cache.is_processed(f))
+        print(f"-> {already_processed} files already processed (will skip)")
+    
+    # Step 3: Ask user how many files to process
     print(f"\nFound {len(gcn_files)} GCN files.")
     try:
         user_input = input(f"Enter the number of files to process (1-{len(gcn_files)}, Enter = all): ").strip()
@@ -35,18 +49,21 @@ def main():
     selected_files = gcn_files[:batch_size]
     print(f"-> Will process {len(selected_files)} files")
     
-    # Step 3: Process batch
+    # Step 4: Process batch with cache
     print(f"\n[2/4] Processing {len(selected_files)} files with {Config.MAX_WORKERS} workers...")
     results = process_batch_pdfs(
         pdf_files=selected_files,
-        max_workers=Config.MAX_WORKERS
+        max_workers=Config.MAX_WORKERS,
+        cache=cache,
+        skip_processed=skip_processed
     )
     
-    # Step 4: Statistics
+    # Step 5: Statistics
     print("\n[3/4] Statistics:")
     success = sum(1 for r in results if r["status"] == "success")
     skip = sum(1 for r in results if r["status"] == "skip")
     error = sum(1 for r in results if r["status"] == "error")
+    cached = sum(1 for r in results if r["status"] == "cached")
     
     # Classify reasons for skip
     skip_bad_filename = sum(1 for r in results if r["status"] == "skip" and "Sai tên file" in str(r.get("error", "")))
@@ -56,6 +73,7 @@ def main():
     incorrect = sum(1 for r in results if r["comparison"] == "Cần hiệu đính")
     
     print(f"  Success: {success}")
+    print(f"  Cached: {cached}")
     print(f"  Skip: {skip}")
     if skip_bad_filename > 0:
         print(f"    - Bad filename: {skip_bad_filename}")
@@ -65,13 +83,13 @@ def main():
     print(f"\n  Comparison:")
     print(f"    - Correct: {correct}")
     print(f"    - Need correction: {incorrect}")
-    if success > 0:
-        accuracy = (correct / success) * 100
+    if (success + cached) > 0:
+        accuracy = (correct / (success + cached)) * 100
         print(f"    - Accuracy: {accuracy:.2f}%")
     
     # Step 5: Export Excel
     print("\n[4/4] Exporting results to Excel...")
-    timestamp = datetime.now().strftime("%Y%m%d")
+    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
     excel_file = Path(f"gcn_comparison_{timestamp}.xlsx")
     export_to_excel(results, excel_file)
     

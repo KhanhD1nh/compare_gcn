@@ -13,3 +13,7 @@ class Config:
     INPUT_DIR: Path = Path("input")
     MAX_WORKERS: int = 5
     API_TIMEOUT: int = 120
+    
+    # Cache Configuration
+    CACHE_DB_FILE: str = "processed_files.db"
+    SKIP_PROCESSED_DEFAULT: bool = True

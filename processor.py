@@ -1,6 +1,6 @@
 from pathlib import Path
 import time
-from typing import List, Dict
+from typing import List, Dict, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from pdf_utils import extract_page2_to_base64
@@ -11,13 +11,16 @@ from gcn_validator import (
     normalize_gcn_number,
     compare_gcn
 )
+from processed_cache import ProcessedCache
 
 
 def process_single_pdf(
     pdf_path: Path, 
     index: int, 
     llm_url: str = None, 
-    api_timeout: int = None
+    api_timeout: int = None,
+    cache: Optional[ProcessedCache] = None,
+    skip_processed: bool = True
 ) -> Dict:
     """
     Process a single PDF file: extract page 2, call LLM, compare
@@ -27,11 +30,32 @@ def process_single_pdf(
         index: Index
         llm_url: LLM API URL (optional)
         api_timeout: API timeout in seconds (optional)
+        cache: ProcessedCache instance (optional)
+        skip_processed: Skip already processed files (default: True)
         
     Returns:
         Dict containing processing result
     """
     start = time.time()
+    
+    # Check cache if enabled
+    if cache and skip_processed and cache.is_processed(pdf_path):
+        cached_result = cache.get_processed_result(pdf_path)
+        result = {
+            "index": index,
+            "pdf_file": pdf_path.name,
+            "pdf_path": str(pdf_path),
+            "filename_gcn": cached_result.get("filename_gcn", ""),
+            "predicted_gcn": cached_result.get("predicted_gcn", ""),
+            "comparison": cached_result.get("comparison", ""),
+            "status": "cached",
+            "error": cached_result.get("error"),
+            "time": 0,
+            "from_cache": True,
+            "processed_at": cached_result.get("processed_at", "")
+        }
+        return result
+    
     result = {
         "index": index,
         "pdf_file": pdf_path.name,
@@ -41,7 +65,8 @@ def process_single_pdf(
         "comparison": "",
         "status": "pending",
         "error": None,
-        "time": 0
+        "time": 0,
+        "from_cache": False
     }
     
     try:
@@ -101,6 +126,10 @@ def process_single_pdf(
     
     finally:
         result["time"] = time.time() - start
+        
+        # Save to cache if processing was successful or skipped
+        if cache and result["status"] in ["success", "skip", "error"]:
+            cache.add_processed(pdf_path, result)
     
     return result
 
@@ -109,7 +138,9 @@ def process_batch_pdfs(
     pdf_files: List[Path],
     max_workers: int = 1,
     llm_url: str = None,
-    api_timeout: int = None
+    api_timeout: int = None,
+    cache: Optional[ProcessedCache] = None,
+    skip_processed: bool = True
 ) -> List[Dict]:
     """
     Process batch of PDF files with multi-threading
@@ -119,6 +150,8 @@ def process_batch_pdfs(
         max_workers: Number of parallel workers
         llm_url: LLM API URL (optional)
         api_timeout: API timeout in seconds (optional)
+        cache: ProcessedCache instance (optional)
+        skip_processed: Skip already processed files (default: True)
         
     Returns:
         List of processing results
@@ -127,7 +160,7 @@ def process_batch_pdfs(
     
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {
-            executor.submit(process_single_pdf, pdf, idx + 1, llm_url, api_timeout): (pdf, idx + 1)
+            executor.submit(process_single_pdf, pdf, idx + 1, llm_url, api_timeout, cache, skip_processed): (pdf, idx + 1)
             for idx, pdf in enumerate(pdf_files)
         }
         
