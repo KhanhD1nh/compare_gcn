@@ -20,7 +20,10 @@ def process_single_pdf(
     llm_url: str = None, 
     api_timeout: int = None,
     cache: Optional[ProcessedCache] = None,
-    skip_processed: bool = True
+    skip_processed: bool = True,
+    provider: str = None,
+    model: str = None,
+    api_key: str = None
 ) -> Dict:
     """
     Process a single PDF file: extract page 2, call LLM, compare
@@ -32,6 +35,9 @@ def process_single_pdf(
         api_timeout: API timeout in seconds (optional)
         cache: ProcessedCache instance (optional)
         skip_processed: Skip already processed files (default: True)
+        provider: LLM provider ("lm_studio" or "openrouter", optional)
+        model: Model name (optional)
+        api_key: API key for OpenRouter (optional)
         
     Returns:
         Dict containing processing result
@@ -91,7 +97,9 @@ def process_single_pdf(
             return result
         
         # Step 3: Call LLM to extract GCN number
-        predicted_gcn_raw, llm_error = extract_gcn_with_llm(img_b64, llm_url, api_timeout)
+        predicted_gcn_raw, llm_error = extract_gcn_with_llm(
+            img_b64, llm_url, api_timeout, provider, model, api_key
+        )
         
         # Normalize predicted GCN
         if predicted_gcn_raw != "ERROR":
@@ -140,7 +148,10 @@ def process_batch_pdfs(
     llm_url: str = None,
     api_timeout: int = None,
     cache: Optional[ProcessedCache] = None,
-    skip_processed: bool = True
+    skip_processed: bool = True,
+    provider: str = None,
+    model: str = None,
+    api_key: str = None
 ) -> List[Dict]:
     """
     Process batch of PDF files with multi-threading
@@ -152,6 +163,9 @@ def process_batch_pdfs(
         api_timeout: API timeout in seconds (optional)
         cache: ProcessedCache instance (optional)
         skip_processed: Skip already processed files (default: True)
+        provider: LLM provider ("lm_studio" or "openrouter", optional)
+        model: Model name (optional)
+        api_key: API key for OpenRouter (optional)
         
     Returns:
         List of processing results
@@ -160,7 +174,10 @@ def process_batch_pdfs(
     
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {
-            executor.submit(process_single_pdf, pdf, idx + 1, llm_url, api_timeout, cache, skip_processed): (pdf, idx + 1)
+            executor.submit(
+                process_single_pdf, pdf, idx + 1, llm_url, api_timeout, 
+                cache, skip_processed, provider, model, api_key
+            ): (pdf, idx + 1)
             for idx, pdf in enumerate(pdf_files)
         }
         

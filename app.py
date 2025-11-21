@@ -44,15 +44,50 @@ def main():
                 search_button = st.form_submit_button("🔎 Tìm kiếm", type="primary", use_container_width=True)
         
         # Configuration section
-        st.subheader("⚙️ Cấu hình")
+        st.subheader("⚙️ Cấu hình LLM")
         
-        # LLM URL configuration
-        llm_url = st.text_input(
-            "🌐 URL của LLM API:",
-            value=Config.LM_URL,
-            placeholder="http://192.168.1.69:1234/v1/chat/completions",
-            help="Địa chỉ URL của LLM API endpoint"
+        # LLM Provider selection
+        provider = st.selectbox(
+            "🤖 LLM Provider:",
+            options=["lm_studio", "openrouter"],
+            index=0 if Config.DEFAULT_PROVIDER == "lm_studio" else 1,
+            format_func=lambda x: "LM Studio (Local)" if x == "lm_studio" else "OpenRouter (Cloud)",
+            help="Chọn LLM provider để sử dụng"
         )
+        
+        # Show different config based on provider
+        if provider == "lm_studio":
+            llm_url = st.text_input(
+                "🌐 URL của LM Studio:",
+                value=Config.LM_STUDIO_URL,
+                placeholder="http://192.168.1.69:1234/v1/chat/completions",
+                help="Địa chỉ URL của LM Studio API endpoint"
+            )
+            model = st.text_input(
+                "📦 Model:",
+                value=Config.LM_STUDIO_MODEL,
+                help="Tên model đang chạy trong LM Studio"
+            )
+            api_key = None
+        else:  # openrouter
+            llm_url = st.text_input(
+                "🌐 URL của OpenRouter:",
+                value=Config.OPENROUTER_URL,
+                placeholder="https://openrouter.ai/api/v1/chat/completions",
+                help="Địa chỉ URL của OpenRouter API endpoint"
+            )
+            model = st.text_input(
+                "📦 Model:",
+                value=Config.OPENROUTER_MODEL,
+                placeholder="google/gemini-2.0-flash-exp:free",
+                help="Tên model trên OpenRouter (xem: https://openrouter.ai/models)"
+            )
+            api_key = st.text_input(
+                "🔑 API Key:",
+                value=Config.OPENROUTER_API_KEY,
+                type="password",
+                help="API Key của OpenRouter (lấy tại: https://openrouter.ai/keys)"
+            )
         
         # Number of workers configuration
         col_config1, col_config2 = st.columns(2)
@@ -179,7 +214,10 @@ def main():
                     futures = {}
                     for idx, pdf in enumerate(selected_files):
                         worker_id = (idx % max_workers) + 1  # Assign worker ID (1 to max_workers)
-                        future = executor.submit(process_single_pdf, pdf, idx + 1, llm_url, api_timeout, cache, skip_processed)
+                        future = executor.submit(
+                            process_single_pdf, pdf, idx + 1, llm_url, api_timeout, 
+                            cache, skip_processed, provider, model, api_key
+                        )
                         futures[future] = (pdf, idx + 1, worker_id)
                     
                     for future in as_completed(futures):
@@ -399,10 +437,18 @@ def main():
         st.markdown("""
         **Cấu hình mặc định:**
         
-        - 🤖 Model: `{}`
+        - 🤖 Provider: `{}`
+        - 📦 LM Studio Model: `{}`
+        - 📦 OpenRouter Model: `{}`
         - 🖼️ DPI: `{}`
         - 🌡️ Temperature: `{}`
-        """.format(Config.MODEL, Config.RENDER_DPI, Config.TEMPERATURE))
+        """.format(
+            Config.DEFAULT_PROVIDER, 
+            Config.LM_STUDIO_MODEL, 
+            Config.OPENROUTER_MODEL,
+            Config.RENDER_DPI, 
+            Config.TEMPERATURE
+        ))
 
 
 if __name__ == "__main__":
