@@ -13,13 +13,20 @@ from gcn_validator import (
 )
 
 
-def process_single_pdf(pdf_path: Path, index: int) -> Dict:
+def process_single_pdf(
+    pdf_path: Path, 
+    index: int, 
+    llm_url: str = None, 
+    api_timeout: int = None
+) -> Dict:
     """
     Process a single PDF file: extract page 2, call LLM, compare
     
     Args:
         pdf_path: Path to PDF file
         index: Index
+        llm_url: LLM API URL (optional)
+        api_timeout: API timeout in seconds (optional)
         
     Returns:
         Dict containing processing result
@@ -59,7 +66,7 @@ def process_single_pdf(pdf_path: Path, index: int) -> Dict:
             return result
         
         # Step 3: Call LLM to extract GCN number
-        predicted_gcn_raw, llm_error = extract_gcn_with_llm(img_b64)
+        predicted_gcn_raw, llm_error = extract_gcn_with_llm(img_b64, llm_url, api_timeout)
         
         # Normalize predicted GCN
         if predicted_gcn_raw != "ERROR":
@@ -100,7 +107,9 @@ def process_single_pdf(pdf_path: Path, index: int) -> Dict:
 
 def process_batch_pdfs(
     pdf_files: List[Path],
-    max_workers: int = 1
+    max_workers: int = 1,
+    llm_url: str = None,
+    api_timeout: int = None
 ) -> List[Dict]:
     """
     Process batch of PDF files with multi-threading
@@ -108,6 +117,8 @@ def process_batch_pdfs(
     Args:
         pdf_files: List of PDF files to process
         max_workers: Number of parallel workers
+        llm_url: LLM API URL (optional)
+        api_timeout: API timeout in seconds (optional)
         
     Returns:
         List of processing results
@@ -116,7 +127,7 @@ def process_batch_pdfs(
     
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {
-            executor.submit(process_single_pdf, pdf, idx + 1): (pdf, idx + 1)
+            executor.submit(process_single_pdf, pdf, idx + 1, llm_url, api_timeout): (pdf, idx + 1)
             for idx, pdf in enumerate(pdf_files)
         }
         
