@@ -1,5 +1,3 @@
-"""Main entry point for GCN comparison tool"""
-
 from pathlib import Path
 import time
 from datetime import datetime
