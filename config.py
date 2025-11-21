@@ -1,7 +1,6 @@
 from pathlib import Path
 
 class Config:
-
     # LLM Configuration
     LM_URL: str = "http://192.168.1.69:1234/v1/chat/completions"
     MODEL: str = "qwen2.5-vl-72b-instruct"
